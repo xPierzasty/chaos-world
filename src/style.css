@@ -1,468 +1,351 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-
-const app = document.querySelector('#app');
-
-app.innerHTML = `
-  <div id="menu-screen" class="screen">
-    <div class="menu-panel">
-      <div class="brand-block">
-        <div class="brand-mark">✦</div>
-        <div>
-          <p class="brand-kicker">rodzinna gra planszowa</p>
-          <h1>BEZKRES</h1>
-        </div>
-      </div>
-
-      <div class="menu-form">
-        <label class="field-row">
-          <span>Gracze</span>
-          <select id="player-count">
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4" selected>4</option>
-            <option value="5">5</option>
-          </select>
-        </label>
-
-        <label class="field-row">
-          <span>Długość planszy</span>
-          <select id="board-length">
-            <option value="10">10 pól</option>
-            <option value="14" selected>14 pól</option>
-            <option value="18">18 pól</option>
-          </select>
-        </label>
-
-        <div id="player-names" class="player-name-grid"></div>
-
-        <button id="start-button" class="action-button" type="button">Rozpocznij podróż</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="game-screen" class="screen hidden">
-    <header class="hud">
-      <div class="hud-pill">
-        <span class="hud-label">Aktywny gracz</span>
-        <strong id="turn-info">Gracz 1</strong>
-      </div>
-      <div class="hud-pill score-pill">
-        <span class="hud-label">Punkty</span>
-        <strong id="score-info">0</strong>
-      </div>
-    </header>
-
-    <div id="game-canvas" aria-label="Plansza gry"></div>
-
-    <div class="footer-bar">
-      <div id="status-text" class="status-text">Wybierz gracza i rozpocznij rozgrywkę.</div>
-      <button id="roll-button" class="roll-button" type="button" aria-label="Rzuć kostką">
-        <span class="roll-label">Rzuć kostką</span>
-        <div id="dice-cube" class="dice-cube" aria-hidden="true">
-          <span class="face front">1</span>
-          <span class="face back">6</span>
-          <span class="face right">2</span>
-          <span class="face left">5</span>
-          <span class="face top">3</span>
-          <span class="face bottom">4</span>
-        </div>
-      </button>
-    </div>
-  </div>
-`;
-
-const refs = {
-  menuScreen: document.querySelector('#menu-screen'),
-  gameScreen: document.querySelector('#game-screen'),
-  playerCount: document.querySelector('#player-count'),
-  boardLength: document.querySelector('#board-length'),
-  playerNames: document.querySelector('#player-names'),
-  startButton: document.querySelector('#start-button'),
-  turnInfo: document.querySelector('#turn-info'),
-  scoreInfo: document.querySelector('#score-info'),
-  gameCanvas: document.querySelector('#game-canvas'),
-  rollButton: document.querySelector('#roll-button'),
-  statusText: document.querySelector('#status-text'),
-  diceCube: document.querySelector('#dice-cube'),
-};
-
-const palette = ['#ff7f50', '#7dbaf7', '#ffd166', '#7bc67f', '#bb86fc'];
-
-const state = {
-  players: [],
-  activeIndex: 0,
-  boardLength: 14,
-  board: [],
-  gameOver: false,
-  isRolling: false,
-  scene: null,
-  camera: null,
-  renderer: null,
-  controls: null,
-  boardGroup: null,
-};
-
-function initGame() {
-  renderNameFields();
-  refs.playerCount.addEventListener('change', renderNameFields);
-  refs.startButton.addEventListener('click', startGame);
-  refs.rollButton.addEventListener('click', rollDice);
-  createScene();
-  updateHud();
+* {
+  box-sizing: border-box;
 }
 
-function renderNameFields() {
-  const count = Number(refs.playerCount.value);
-  const values = Array.from({ length: count }, (_, index) => {
-    const previous = refs.playerNames.querySelectorAll('input')[index]?.value?.trim();
-    return previous || `Gracz ${index + 1}`;
-  });
-
-  refs.playerNames.innerHTML = values
-    .map(
-      (value, index) => `
-        <label class="name-field">
-          <span>Gracz ${index + 1}</span>
-          <input type="text" maxlength="16" value="${value}" aria-label="Imię gracza ${index + 1}" />
-        </label>
-      `,
-    )
-    .join('');
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(circle at top, #dff5ff 0%, #b8d9ec 35%, #6e99b5 100%);
+  color: #112334;
 }
 
-function createScene() {
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x8ecaec);
-  scene.fog = new THREE.Fog(0x8ecaec, 18, 42);
-
-  const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 200);
-  camera.position.set(10, 10, 12);
-
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(refs.gameCanvas.clientWidth, refs.gameCanvas.clientHeight);
-  refs.gameCanvas.appendChild(renderer.domElement);
-
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.enablePan = true;
-  controls.enableZoom = true;
-  controls.minDistance = 9;
-  controls.maxDistance = 28;
-  controls.maxPolarAngle = Math.PI / 2.25;
-  controls.target.set(0, 0.4, 0);
-
-  const ambient = new THREE.AmbientLight(0xffffff, 1.25);
-  scene.add(ambient);
-
-  const sun = new THREE.DirectionalLight(0xfff4d8, 1.5);
-  sun.position.set(8, 14, 5);
-  scene.add(sun);
-
-  const boardGroup = new THREE.Group();
-  scene.add(boardGroup);
-
-  state.scene = scene;
-  state.camera = camera;
-  state.renderer = renderer;
-  state.controls = controls;
-  state.boardGroup = boardGroup;
-
-  buildWorld();
-  animate();
-
-  window.addEventListener('resize', () => {
-    const width = refs.gameCanvas.clientWidth;
-    const height = refs.gameCanvas.clientHeight;
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height);
-  });
+button,
+input,
+select {
+  font: inherit;
 }
 
-function buildWorld() {
-  const { boardGroup } = state;
-
-  const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(18, 64),
-    new THREE.MeshStandardMaterial({ color: 0x6bbf75, roughness: 1 }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.35;
-  boardGroup.add(ground);
-
-  const regionConfigs = [
-    { name: 'wiosna', color: 0x8adf5b, position: [-8, 0, -8], size: [14, 14] },
-    { name: 'lato', color: 0xf5d262, position: [8, 0, -8], size: [14, 14] },
-    { name: 'jesień', color: 0xef8f56, position: [-8, 0, 8], size: [14, 14] },
-    { name: 'zima', color: 0x99d7ff, position: [8, 0, 8], size: [14, 14] },
-  ];
-
-  regionConfigs.forEach(({ color, position }) => {
-    const region = new THREE.Mesh(
-      new THREE.BoxGeometry(position[2] === -8 ? 10 : 10, 0.2, 10),
-      new THREE.MeshStandardMaterial({ color, roughness: 1 }),
-    );
-    region.position.set(position[0], -0.18, position[2]);
-    boardGroup.add(region);
-  });
-
-  const riverCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-12, 0.05, -2),
-    new THREE.Vector3(-4, 0.05, 5),
-    new THREE.Vector3(4, 0.05, 7),
-    new THREE.Vector3(12, 0.05, 2),
-    new THREE.Vector3(15, 0.05, -4),
-  ]);
-  const river = new THREE.Mesh(
-    new THREE.TubeGeometry(riverCurve, 120, 0.55, 18, false),
-    new THREE.MeshStandardMaterial({ color: 0x56b8df, emissive: 0x1a5f8b, emissiveIntensity: 0.28 }),
-  );
-  boardGroup.add(river);
-
-  const bridgePositions = [-8, -2, 4, 10];
-  bridgePositions.forEach((x, index) => {
-    const bridge = new THREE.Mesh(
-      new THREE.BoxGeometry(2.4, 0.22, 0.9),
-      new THREE.MeshStandardMaterial({ color: 0x9e7a4f }),
-    );
-    bridge.position.set(x, 0.35, 0.5 + index * 1.1);
-    boardGroup.add(bridge);
-  });
-
-  const treePositions = [
-    [-11, -9], [-10, 6], [-4, -11], [-2, 10], [5, -10], [9, 8], [12, -5], [12, 6],
-    [-12, 2], [0, -2], [7, 2], [1, 12],
-  ];
-
-  treePositions.forEach(([x, z]) => {
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18, 0.22, 1, 10),
-      new THREE.MeshStandardMaterial({ color: 0x784f2f }),
-    );
-    trunk.position.set(x, 0.6, z);
-    boardGroup.add(trunk);
-
-    const crown = new THREE.Mesh(
-      new THREE.ConeGeometry(0.8, 2.1, 12),
-      new THREE.MeshStandardMaterial({ color: 0x2d8a4b }),
-    );
-    crown.position.set(x, 1.9, z);
-    boardGroup.add(crown);
-  });
-
-  const mountainPositions = [
-    [-14, -10], [-12, 11], [14, -7], [13, 9], [0, -12], [0, 12],
-  ];
-
-  mountainPositions.forEach(([x, z], index) => {
-    const mountain = new THREE.Mesh(
-      new THREE.ConeGeometry(1.5 + (index % 3) * 0.5, 2.8 + (index % 2), 18),
-      new THREE.MeshStandardMaterial({ color: 0x8d8f94 }),
-    );
-    mountain.position.set(x, 1.6, z);
-    boardGroup.add(mountain);
-  });
-
-  const ruinPositions = [
-    [-6, -7], [2, 8], [9, -2], [-9, 9],
-  ];
-
-  ruinPositions.forEach(([x, z]) => {
-    const ruin = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 1.2, 1.2),
-      new THREE.MeshStandardMaterial({ color: 0x6d7280, roughness: 0.9 }),
-    );
-    ruin.position.set(x, 0.7, z);
-    boardGroup.add(ruin);
-  });
+button {
+  cursor: pointer;
 }
 
-function startGame() {
-  const playerCount = Number(refs.playerCount.value);
-  const boardLength = Number(refs.boardLength.value);
-  const names = Array.from(refs.playerNames.querySelectorAll('input')).map((input, index) => {
-    const raw = input.value.trim();
-    return raw || `Gracz ${index + 1}`;
-  });
-
-  state.boardLength = boardLength;
-  state.activeIndex = 0;
-  state.gameOver = false;
-  state.isRolling = false;
-  state.players = names.slice(0, playerCount).map((name, index) => ({
-    name,
-    score: 0,
-    position: 0,
-    color: palette[index % palette.length],
-    mesh: null,
-    number: index + 1,
-  }));
-
-  refs.menuScreen.classList.add('hidden');
-  refs.gameScreen.classList.remove('hidden');
-
-  buildBoard(boardLength);
-  placePawns();
-  updateHud();
-  updateStatus(`${state.players[0].name} zaczyna podróż.`);
-  refs.rollButton.disabled = false;
+.screen {
+  width: 100%;
+  height: 100%;
 }
 
-function buildBoard(length) {
-  const tiles = [];
-  for (let i = 0; i < length; i += 1) {
-    const t = i / Math.max(1, length - 1);
-    const x = -11 + t * 22 + Math.sin(i * 1.2) * 2.5;
-    const z = 8 * Math.cos(i * 0.95) + (t - 0.5) * 6;
-    const region = i < length * 0.25 ? 'wiosna' : i < length * 0.5 ? 'lato' : i < length * 0.75 ? 'jesień' : 'zima';
-    const reward = i === 0 ? 0 : i % 4 === 0 ? 4 : i % 3 === 0 ? 2 : 1;
+.screen.hidden {
+  display: none;
+}
 
-    const tile = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.95, 0.95, 0.28, 18),
-      new THREE.MeshStandardMaterial({
-        color: region === 'wiosna' ? 0x61c97b : region === 'lato' ? 0xf7d76b : region === 'jesień' ? 0xe3875b : 0x9bccf5,
-      }),
-    );
-    tile.position.set(x, 0.18, z);
-    tile.castShadow = true;
+.menu-panel {
+  width: min(680px, 100% - 28px);
+  margin: 0 auto;
+  padding: 28px 24px 32px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 22px;
+}
 
-    const marker = new THREE.Mesh(
-      new THREE.SphereGeometry(reward > 0 ? 0.28 : 0.01, 16, 16),
-      new THREE.MeshStandardMaterial({
-        color: reward > 0 ? 0xf4d35e : 0x000000,
-        emissive: reward > 0 ? 0x9a7300 : 0x000000,
-        emissiveIntensity: reward > 0 ? 0.6 : 0,
-      }),
-    );
-    marker.position.set(x, 0.7, z);
-    marker.visible = reward > 0;
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: rgba(18, 33, 44, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 24px;
+  padding: 22px 18px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 18px 42px rgba(13, 32, 46, 0.12);
+}
 
-    state.boardGroup.add(tile);
-    state.boardGroup.add(marker);
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #d9f6c7, #7bc67f 60%, #4d7d4e);
+  color: #112334;
+  font-size: 2rem;
+  box-shadow: 0 10px 28px rgba(63, 126, 60, 0.28);
+}
 
-    tiles.push({ x, z, region, reward, collected: false, marker, tile });
+.brand-kicker {
+  margin: 0 0 6px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+.brand-block h1 {
+  margin: 0;
+  font-size: clamp(2.6rem, 6vw, 4.2rem);
+  letter-spacing: 0.18em;
+  line-height: 0.95;
+}
+
+.menu-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(13, 32, 46, 0.12);
+  border-radius: 26px;
+  padding: 20px;
+  box-shadow: 0 18px 38px rgba(24, 47, 63, 0.14);
+}
+
+.field-row,
+.name-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-weight: 600;
+}
+
+.field-row span {
+  color: #1a2d3d;
+}
+
+.field-row select,
+.name-field input {
+  min-width: 160px;
+  padding: 12px 14px;
+  border: 1px solid rgba(18, 33, 44, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #142434;
+}
+
+.player-name-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.name-field {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.name-field input {
+  width: 100%;
+}
+
+.action-button,
+.roll-button {
+  border: none;
+  border-radius: 18px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.action-button {
+  padding: 16px 18px;
+  background: linear-gradient(135deg, #d8f4b8, #82c76f 60%, #456d3a);
+  color: #10263a;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: 0 12px 20px rgba(69, 109, 58, 0.28);
+}
+
+.action-button:hover,
+.roll-button:hover {
+  transform: translateY(-2px) scale(1.01);
+}
+
+#game-screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.hud {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.hud-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(17, 25, 30, 0.56);
+  color: #ecfbff;
+  padding: 10px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(10px);
+  min-width: 160px;
+  pointer-events: auto;
+}
+
+.hud-label {
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.score-pill {
+  text-align: right;
+}
+
+#game-canvas {
+  flex: 1;
+  min-height: 56vh;
+  width: 100%;
+}
+
+#game-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.footer-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 20px 20px;
+  pointer-events: none;
+}
+
+.status-text {
+  max-width: min(52vw, 500px);
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 12px 20px;
+  border-radius: 16px;
+  background: rgba(16, 39, 53, 0.58);
+  color: #ecfbff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 20px 44px rgba(10, 20, 29, 0.16);
+  pointer-events: auto;
+}
+
+.roll-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: linear-gradient(180deg, rgba(21, 44, 62, 0.52), rgba(10, 26, 37, 0.88));
+  padding: 16px 18px 14px;
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 18px 32px rgba(14, 24, 32, 0.42);
+  min-width: 220px;
+  pointer-events: auto;
+}
+
+.roll-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.roll-label {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dice-cube {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  transform-style: preserve-3d;
+  transition: transform 0.24s ease;
+}
+
+.face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fffaf0, #d5f1ff 58%, #c9d9ff);
+  color: #16324d;
+  font-weight: 900;
+  border: 1px solid rgba(15, 29, 41, 0.18);
+  box-shadow: inset -6px -8px 16px rgba(79, 104, 132, 0.14);
+}
+
+.front { transform: rotateY(0deg) translateZ(26px); }
+.back { transform: rotateY(180deg) translateZ(26px); }
+.right { transform: rotateY(90deg) translateZ(26px); }
+.left { transform: rotateY(-90deg) translateZ(26px); }
+.top { transform: rotateX(90deg) translateZ(26px); }
+.bottom { transform: rotateX(-90deg) translateZ(26px); }
+
+@media (max-width: 720px) {
+  .menu-panel {
+    width: 100%;
+    padding: 20px 14px 26px;
   }
 
-  state.board = tiles;
-}
-
-function placePawns() {
-  const firstTile = state.board[0];
-  state.players.forEach((player, index) => {
-    const pawn = new THREE.Mesh(
-      new THREE.SphereGeometry(0.42, 18, 18),
-      new THREE.MeshStandardMaterial({ color: player.color, emissive: player.color, emissiveIntensity: 0.22 }),
-    );
-    pawn.position.set(firstTile.x + index * 0.8, 0.7, firstTile.z + index * 0.4);
-    state.boardGroup.add(pawn);
-    player.mesh = pawn;
-    player.position = 0;
-  });
-}
-
-function updateHud() {
-  const activePlayer = state.players[state.activeIndex] || { name: '—' };
-  refs.turnInfo.textContent = activePlayer.name || '—';
-  refs.scoreInfo.textContent = state.players.length
-    ? state.players.map((player) => `${player.name}: ${player.score}`).join('  •  ')
-    : '0';
-}
-
-function updateStatus(message) {
-  refs.statusText.textContent = message;
-}
-
-function rollDice() {
-  if (state.isRolling || state.gameOver || !state.players.length) {
-    return;
+  .brand-block {
+    align-items: flex-start;
   }
 
-  state.isRolling = true;
-  refs.rollButton.disabled = true;
-  const result = 1 + Math.floor(Math.random() * 6);
-
-  const start = performance.now();
-  const duration = 850;
-
-  const tick = (time) => {
-    const progress = Math.min((time - start) / duration, 1);
-    const eased = 1 - Math.pow(1 - progress, 3);
-    const angleX = eased * 7.5 * Math.PI;
-    const angleY = eased * 10 * Math.PI;
-    refs.diceCube.style.transform = `rotateX(${angleX}rad) rotateY(${angleY}rad) rotateZ(${eased * 5 * Math.PI}rad)`;
-
-    if (progress < 1) {
-      requestAnimationFrame(tick);
-      return;
-    }
-
-    state.isRolling = false;
-    refs.rollButton.disabled = state.gameOver;
-    moveActivePlayer(result);
-  };
-
-  requestAnimationFrame(tick);
-}
-
-function moveActivePlayer(rollValue) {
-  const player = state.players[state.activeIndex];
-  if (!player) {
-    return;
+  .brand-block h1 {
+    letter-spacing: 0.1em;
   }
 
-  const targetPosition = Math.min(state.boardLength - 1, player.position + rollValue);
-  player.position = targetPosition;
-
-  const tile = state.board[targetPosition];
-  player.mesh.position.set(tile.x, 0.7, tile.z);
-
-  if (tile.reward > 0 && !tile.collected) {
-    player.score += tile.reward;
-    tile.collected = true;
-    tile.marker.visible = false;
-    updateStatus(`${player.name} zdobywa ${tile.reward} punktów na polu ${targetPosition + 1}.`);
-  } else {
-    updateStatus(`${player.name} przesuwa się na pole ${targetPosition + 1}.`);
+  .field-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  if (targetPosition >= state.boardLength - 1) {
-    state.gameOver = true;
-    refs.rollButton.disabled = true;
-    updateStatus(`${player.name} wygrywa krainę!`);
-    updateHud();
-    return;
+  .field-row select,
+  .name-field input {
+    width: 100%;
+    min-width: 0;
   }
 
-  state.activeIndex = (state.activeIndex + 1) % state.players.length;
-  updateHud();
-  const nextPlayer = state.players[state.activeIndex];
-  const nextTile = state.board[nextPlayer.position];
-  if (nextTile) {
-    state.camera.position.lerp(new THREE.Vector3(nextTile.x + 6, 8, nextTile.z + 8), 0.12);
-    state.controls.target.lerp(new THREE.Vector3(nextTile.x, 0.5, nextTile.z), 0.2);
+  .hud {
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    gap: 8px;
   }
-  updateStatus(`${nextPlayer.name} ma teraz ruch.`);
-  refs.rollButton.disabled = false;
-}
 
-function animate() {
-  requestAnimationFrame(animate);
+  .hud-pill {
+    min-width: 0;
+    flex: 1;
+    padding: 8px 10px;
+  }
 
-  if (state.scene && state.camera && state.renderer) {
-    if (state.players.length && !state.gameOver) {
-      const active = state.players[state.activeIndex];
-      if (active && active.mesh) {
-        const desired = active.mesh.position.clone().add(new THREE.Vector3(7, 7, 8));
-        state.camera.position.lerp(desired, 0.06);
-        state.controls.target.lerp(new THREE.Vector3(active.mesh.position.x, 0.7, active.mesh.position.z), 0.14);
-      }
-    }
+  .footer-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0 12px 12px;
+  }
 
-    state.controls.update();
-    state.renderer.render(state.scene, state.camera);
+  .status-text {
+    max-width: none;
+    width: 100%;
+  }
+
+  .roll-button {
+    width: 100%;
+    justify-content: space-between;
+    min-width: 0;
   }
 }
-
-export { initGame };
